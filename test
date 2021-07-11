@@ -1,0 +1,273 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "colab": {
+      "name": "Untitled1.ipynb",
+      "provenance": [],
+      "collapsed_sections": [],
+      "mount_file_id": "1D0b473ZMPV7_IMxUwejNSS0ohlHZ7Foj",
+      "authorship_tag": "ABX9TyPOxT5Pt5cXq4SgvJG8Sdmr",
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "name": "python3",
+      "display_name": "Python 3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/Jantonyelly/facerecognition/blob/main/test\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "_XA3uiQ7wHwT"
+      },
+      "source": [
+        "import timeit\n",
+        "import datetime as dt\n",
+        "import numpy as np\n",
+        "import pandas as pd\n",
+        "import seaborn as sns\n",
+        "import matplotlib.pyplot as plt\n",
+        "from scipy import stats\n",
+        "from scipy import optimize\n",
+        "from sklearn import metrics\n",
+        "from sklearn import preprocessing\n",
+        "from sklearn import svm\n",
+        "from sklearn.ensemble import RandomForestClassifier\n",
+        "from sklearn.ensemble import VotingClassifier\n",
+        "from sklearn.model_selection import RandomizedSearchCV\n",
+        "from sklearn.model_selection import StratifiedShuffleSplit\n",
+        "from sklearn.model_selection import cross_val_score\n",
+        "from sklearn.calibration import CalibratedClassifierCV, calibration_curve\n",
+        "from sklearn.utils import class_weight\n",
+        "try:\n",
+        "    # Using experimental HalvingRandomSearchCV for hyperparameters optimization\n",
+        "    from sklearn.experimental import enable_halving_search_cv # noqa\n",
+        "    from sklearn.model_selection import HalvingRandomSearchCV\n",
+        "except ImportError:\n",
+        "    print('HalvingRandomSearchCV not found. Update scikit-learn to 0.24.')"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "atNonEdhwQAG"
+      },
+      "source": [
+        "# TensorFlow 2 -> Keras\n",
+        "from tensorflow import keras"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "pVkQTE-wxx8j"
+      },
+      "source": [
+        "import warnings\n",
+        "warnings.filterwarnings(action='ignore', category=FutureWarning)\n",
+        "# Inline figures\n",
+        "%matplotlib inline\n",
+        "# Figure aesthetics from Seaborn\n",
+        "sns.set(context='paper', style='white', font_scale=1.2)\n",
+        "sns.set_style('ticks', {'xtick.direction':'in', 'ytick.direction':'in'})"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "wAzPcrBKyC99"
+      },
+      "source": [
+        "# An ancilary function for showing the confusion matrix, taken from:表示混淆矩阵的辅助函数\n",
+        "# https://github.com/amueller/introduction_to_ml_with_python/blob/master/mglearn/tools.py\n",
+        "def heatmap(values, xlabel, ylabel, xticklabels, yticklabels, cmap=None,\n",
+        "            vmin=None, vmax=None, ax=None, fmt=\"%0.2f\", fontsize=14):\n",
+        "    if ax is None:\n",
+        "        ax = plt.gca()\n",
+        "    # plot the mean cross-validation scores\n",
+        "    img = ax.pcolor(values, cmap=cmap, vmin=vmin, vmax=vmax)\n",
+        "    img.update_scalarmappable()\n",
+        "    ax.set_xlabel(xlabel)\n",
+        "    ax.set_ylabel(ylabel)\n",
+        "    ax.set_xticks(np.arange(len(xticklabels)) + .5)\n",
+        "    ax.set_yticks(np.arange(len(yticklabels)) + .5)\n",
+        "    ax.set_xticklabels(xticklabels)\n",
+        "    ax.set_yticklabels(yticklabels)\n",
+        "    ax.set_aspect(1)\n",
+        "\n",
+        "    for p, color, value in zip(img.get_paths(), img.get_facecolors(),\n",
+        "                               img.get_array()):\n",
+        "        x, y = p.vertices[:-2, :].mean(0)\n",
+        "        if np.mean(color[:3]) > 0.5:\n",
+        "            c = 'k'\n",
+        "        else:\n",
+        "            c = 'w'\n",
+        "        ax.text(x, y, fmt % value, color=c, ha=\"center\", va=\"center\", fontsize=fontsize)\n",
+        "    return img"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "j2p51QnrybEv"
+      },
+      "source": [
+        "def matthews_score(y_true, y_pred):\n",
+        "    \"\"\"\" Matthews correlation coeficient \n",
+        "\n",
+        "    Matthews coefficient ranges between -1 and +1. A coefficient of +1 \n",
+        "    represents a perfect prediction, 0 no better than random guessing \n",
+        "    and -1 indicates a total disagreement between prediction and observation.\n",
+        "\n",
+        "    Arguments马修斯的相关性系数\n",
+        "    马修斯系数的范围在-1和+1之间。一个+1的系数表示一个完美的预测，0并不比随机猜测好-1表示预测和观察完全不一致。参数\n",
+        "    ---------\n",
+        "    y_true: array-like of shape (n_samples,)\n",
+        "        Ground truth (correct) target values.\n",
+        "    y_pred: array-like of shape (n_samples,)\n",
+        "        Estimated targets as returned by a classifier.\n",
+        "   Y_true:形状为(n_samples，)的数组地面真实(正确)目标值。\n",
+        "   Y_pred:形状为(n_samples，)的数组分类器返回的估计目标\n",
+        "    Returns\n",
+        "    -------\n",
+        "    matthews: float\n",
+        "        Matthews correlation coefficient between -1 and +1.-1和+1之间的马修斯相关系数\n",
+        "    \"\"\"\n",
+        "    # Confusion matrix\n",
+        "    C_mat = metrics.confusion_matrix(y_true, y_pred)\n",
+        "    tn = C_mat[0,0]  # true negatives\n",
+        "    fn = C_mat[1,0]  # false negatives\n",
+        "    tp = C_mat[1,1]  # true positives\n",
+        "    fp = C_mat[0,1]  # false positives\n",
+        "    # Matthews coefficient\n",
+        "    matthews = (tp*tn - fp*fn) / np.sqrt((tp + fp)*(tp + fn)*(tn + fp)*(tn + fn))\n",
+        "    return matthews"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "V0xfmgY5y1z6"
+      },
+      "source": [
+        "def brier_score(y_labels, y_probas):\n",
+        "    \"\"\" Briers score for binary classification.二元分类的Briers评分。\n",
+        "\n",
+        "    Arguments\n",
+        "    ---------\n",
+        "    y_labels: array-like\n",
+        "        Array with actual class labels (zeros and ones).\n",
+        "    y_probas: array-like\n",
+        "        Array with probabilities of positive class (of class one).y_labels:数组类具有实际类标签(0和1)的数组。y_probas:数组类具有正类(第一类)概率的数组。\n",
+        "    Returns\n",
+        "    -------\n",
+        "    BS: float\n",
+        "        Briers score value.\n",
+        "    \"\"\"\n",
+        "    n_samples = len(y_labels)\n",
+        "    BS = np.sum((y_labels - y_probas)**2)/float(n_samples)\n",
+        "    return BS"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 245
+        },
+        "id": "LocjwJNZ0fdc",
+        "outputId": "27bea30e-be14-4ddd-9853-9df1c568196f"
+      },
+      "source": [
+        "import tensorflow as tf\n",
+        "saver = tf.train.Saver()\n",
+        "sess = tf.session()\n",
+        "sess.run(tf.global_variables_initializer())\n",
+        "saver.save(sess,'/content/drive/MyDrive/test')\n",
+        "sess.close()"
+      ],
+      "execution_count": 23,
+      "outputs": [
+        {
+          "output_type": "error",
+          "ename": "AttributeError",
+          "evalue": "ignored",
+          "traceback": [
+            "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+            "\u001b[0;31mAttributeError\u001b[0m                            Traceback (most recent call last)",
+            "\u001b[0;32m<ipython-input-23-f148f09ba66b>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m()\u001b[0m\n\u001b[1;32m      1\u001b[0m \u001b[0;32mimport\u001b[0m \u001b[0mtensorflow\u001b[0m \u001b[0;32mas\u001b[0m \u001b[0mtf\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m----> 2\u001b[0;31m \u001b[0msaver\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mtf\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mtrain\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mSaver\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      3\u001b[0m \u001b[0msess\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mtf\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msession\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      4\u001b[0m \u001b[0msess\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mrun\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mtf\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mglobal_variables_initializer\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      5\u001b[0m \u001b[0msaver\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msave\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0msess\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m'/content/drive/MyDrive/test'\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;31mAttributeError\u001b[0m: module 'tensorflow._api.v2.train' has no attribute 'Saver'"
+          ]
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "mGi0Bk2v3tkX"
+      },
+      "source": [
+        ""
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/",
+          "height": 353
+        },
+        "id": "O_rE0BMk3txy",
+        "outputId": "c5cc95c9-99f3-487f-d0bf-5851be1f982f"
+      },
+      "source": [
+        "\n",
+        "PATH = './drive/MyDrive/tran.pth'\n",
+        "torch.save(best_model.state_dict(), PATH)"
+      ],
+      "execution_count": 25,
+      "outputs": [
+        {
+          "output_type": "error",
+          "ename": "ModuleNotFoundError",
+          "evalue": "ignored",
+          "traceback": [
+            "\u001b[0;31m---------------------------------------------------------------------------\u001b[0m",
+            "\u001b[0;31mModuleNotFoundError\u001b[0m                       Traceback (most recent call last)",
+            "\u001b[0;32m<ipython-input-25-00c8c0141c3b>\u001b[0m in \u001b[0;36m<module>\u001b[0;34m()\u001b[0m\n\u001b[0;32m----> 1\u001b[0;31m \u001b[0;32mimport\u001b[0m \u001b[0mpytorch\u001b[0m  \u001b[0;32mas\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m      2\u001b[0m \u001b[0mPATH\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0;34m'./drive/MyDrive/tran.pth'\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m      3\u001b[0m \u001b[0mtorch\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0msave\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mbest_model\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mstate_dict\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mPATH\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+            "\u001b[0;31mModuleNotFoundError\u001b[0m: No module named 'pytorch'",
+            "",
+            "\u001b[0;31m---------------------------------------------------------------------------\u001b[0;32m\nNOTE: If your import is failing due to a missing package, you can\nmanually install dependencies using either !pip or !apt.\n\nTo view examples of installing some common dependencies, click the\n\"Open Examples\" button below.\n\u001b[0;31m---------------------------------------------------------------------------\u001b[0m\n"
+          ]
+        }
+      ]
+    }
+  ]
+}
